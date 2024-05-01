@@ -1,0 +1,125 @@
+#define STAMPLENGTH 6 // hardcoded primes, 2 not included! 
+   // 6 is optimal value. Higher would decrease CPU operations but the stamp wouldn't fit into L2 cache
+#define uint unsigned int
+#define uchar unsigned char
+#define bool unsigned char
+#define true 1
+#define false 0
+#define allocate(type,name,size) type name = (type)malloc(size); if (NULL == name) { printf("\nFailed to allocate %llu bytes for %s\n", size, #name); exit(1);}
+#define STAMPSIZE 255255 // 3 * 5 * 7 * 11 * 13 * 17 first STAMPLENGTH primes just odd numbers
+
+
+void writesievesqlimit(const uint* primearray, const uint pmin, uchar* sieve, const uint sievebottom) {
+    // changes the bitpacked sieve value 0 if primes in the array are dividing it. Use if you have enough primes
+    const char bitsetmask[8] = { 0b11111110,0b11111101,0b11111011,0b11110111,0b11101111,0b11011111,0b10111111,0b01111111 };
+    const uint limit = (uint)(sqrt(sievebottom + 2 * STAMPSIZE) + 1);
+    for (uint i = pmin; primearray[i] < limit ; i++) {
+        const uint actualprime = primearray[i];
+        uint j = (sievebottom+1) % actualprime;
+        if (j > 0) {
+            j = actualprime - j;
+            if (j & 1) j += actualprime;
+            j = j >> 1;
+        }        
+        while (j < STAMPSIZE) {
+            sieve[j >> 3] &= bitsetmask[j & 0b00000111];
+            j += actualprime;
+        }
+    }    
+}
+
+void writesievepmaxlimit(const uint* primearray, const uint pmin, const uint pmax, uchar* sieve) {
+    // changes the bitpacked sieve value 0 if primes in the array are dividing it. Use if you have less primes than needed to write the whole sieve
+    const char bitsetmask[8] = { 0b11111110,0b11111101,0b11111011,0b11110111,0b11101111,0b11011111,0b10111111,0b01111111 };
+    for (uint i = pmin; i < pmax; i++) {
+        uint j = primearray[i] >> 1; 
+        while (j < STAMPSIZE) {
+            sieve[j >> 3] &= bitsetmask[j & 0b00000111];
+            j += primearray[i];
+        }
+    }
+}
+
+void readsieve(uint* primearray, uint* pmax, const uint primelimit, const uchar* sieve, const uint sievebottom) {
+    // reads primes from the sieve and adding them to primearray, up to primelimit
+    const char bitgetmask[8] = { 1,2,4,8,16,32,64,128 };
+    const uint STAMPBUFSIZE = STAMPSIZE / 8 + 1;
+
+    uint readstart = 0;
+    uint readend= (primelimit - sievebottom + 16384) >> 4 ; // assuming the distance between primes is smaller than 16K
+    if (readend > STAMPBUFSIZE) readend = STAMPBUFSIZE;
+    if (0 == sievebottom) {
+        readstart = (primearray[(*pmax) - 1] - sievebottom) >> 4;
+        for (uint j = 0; j < 8; j++) {
+            if (sieve[readstart] & bitgetmask[j]) {
+                const uint nextprime = sievebottom + readstart * 16 + j * 2 + 1;
+                if (nextprime > primearray[(*pmax) - 1]) primearray[(*pmax)++] = nextprime;
+            }
+        }
+        readstart++;
+    }
+    for (uint i = readstart; i < readend; i++) {
+        const uint sb1 = sievebottom + 1 + (i << 4);
+        const uint ii = sieve[i];  
+
+        if  (ii & 1) primearray[(*pmax)++] = sb1;
+        if  (ii & 2) primearray[(*pmax)++] = sb1 + 2;
+        if  (ii & 4) primearray[(*pmax)++] = sb1 + 4;
+        if  (ii & 8) primearray[(*pmax)++] = sb1 + 6;
+        if (ii & 16) primearray[(*pmax)++] = sb1 + 8;
+        if (ii & 32) primearray[(*pmax)++] = sb1 + 10;
+        if (ii & 64) primearray[(*pmax)++] = sb1 + 12;
+        if (ii &128) primearray[(*pmax)++] = sb1 + 14;
+    }
+    while (primearray[(*pmax) - 1] >= primelimit) (*pmax)--;
+}
+
+uint* flatsieveprimeseek(const uint ptop, uint* primecnt) { // returns a pointer to a prime array, and its size
+     // first prime: array[0], last prime array[primecnt-1]) 
+
+    const uint FIRSTPRIMES[STAMPLENGTH] = { 3,5,7,11,13,17 };
+    const size_t STAMPBUFSIZE = (size_t)STAMPSIZE / 8 + 1;
+#define PRIMECNTMAX 5
+    const uint M = 1000000;
+    const uint PRIMELIMITS[PRIMECNTMAX] = { 100000, M, 10 * M, 100 * M, 1000 * M };
+    const uint PRIMERATIO[PRIMECNTMAX] = { 10, 12, 15, 17, 19 }; // prime counting function says that if ptop > PRIMELIMITS[n], then the number of primes is less than ptop/PRIMERATIO[n]
+    const uint SIEVEMAXSIZE = 32 * 1024 *8;
+   
+    allocate(uchar*,stamp, STAMPBUFSIZE)
+    memset(stamp, 255, STAMPBUFSIZE-1);
+    stamp[STAMPBUFSIZE - 1] = 127;
+
+    uint primememsize;
+    for (uint i = 0; i < PRIMECNTMAX; i++) if (ptop >= PRIMELIMITS[i]) primememsize = ptop / PRIMERATIO[i];
+    if (primememsize < STAMPSIZE/3) primememsize = STAMPSIZE / 3;
+    allocate(uint*, primearray, primememsize * sizeof(int))
+    primearray[0] = 2;
+    uint pmax;
+    for (pmax = 1; pmax <= STAMPLENGTH; pmax++) primearray[pmax] = FIRSTPRIMES[pmax-1];
+    writesievepmaxlimit(primearray, 1, pmax, stamp);
+    uint oldpmax = pmax;
+    readsieve(primearray, &pmax, (primearray[pmax - 1]+2)* (primearray[pmax - 1] + 2), stamp,0);
+
+    allocate(uchar*, sieve, STAMPBUFSIZE)
+    memcpy(sieve, stamp, STAMPBUFSIZE);
+
+    writesievepmaxlimit(primearray, oldpmax, pmax, sieve);
+    oldpmax = pmax;
+    uint nextpossibleprimesq = (primearray[pmax - 1] + 2) * (primearray[pmax - 1] + 2);
+    readsieve(primearray, &pmax, (nextpossibleprimesq < ptop) ? nextpossibleprimesq : ptop, sieve,0);     
+#define normalreturn { free(stamp); free(sieve); *primecnt = pmax; return(primearray);}
+    if (ptop < nextpossibleprimesq) normalreturn
+
+    writesievesqlimit(primearray, oldpmax, sieve,0);
+    readsieve(primearray, &pmax, ptop, sieve,0);
+
+    uint stampcnt = 1;
+    while (ptop > STAMPSIZE * 2 * stampcnt) {
+        memcpy(sieve, stamp, STAMPBUFSIZE);
+        writesievesqlimit(primearray, STAMPLENGTH + 1, sieve, STAMPSIZE * 2 * stampcnt);
+        readsieve(primearray, &pmax, ptop, sieve, STAMPSIZE * 2 * stampcnt);
+        stampcnt++;
+    }
+    normalreturn   
+  
+}
